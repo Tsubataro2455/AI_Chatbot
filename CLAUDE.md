@@ -10,20 +10,31 @@ Streamlit + LangChain + Anthropic Claude を使用したチャットアプリ。
 
 ## コマンド
 
-Docker Compose が想定された開発手順（`env_file` で `.env` が読み込まれ、プロジェクトディレクトリが `/app` にバインドマウントされるため編集がホットリロードされる）:
+### Docker での実行（推奨）
+
+`env_file` で `.env` が読み込まれ、プロジェクトディレクトリが `/app` にバインドマウントされるため、ホスト側での編集がコンテナ内でホットリロードされる：
 
 ```bash
-docker compose up --build     # 初回 / requirements.txt 変更後
-docker compose up             # 2回目以降
+docker compose up --build     # 初回またはrequirements.txt変更後（イメージを再構築）
+docker compose up             # 2回目以降（既存イメージを使用）
+docker compose down           # コンテナを停止・削除
 ```
 
-アプリは http://localhost:8501 で起動する。
+アプリは http://localhost:8501 にアクセス可能。
 
-ホスト側で直接動かす場合:
+### ホスト側での直接実行
 
 ```bash
 pip install -r requirements.txt
 streamlit run src/main.py
+```
+
+その後 http://localhost:8501 にアクセス。
+
+### 依存のアップデート
+
+```bash
+pip freeze > requirements.txt  # 現在の環境をスナップショット化（バージョン未指定の修正時に使用）
 ```
 
 ## Docker の注意点
@@ -32,24 +43,52 @@ streamlit run src/main.py
 
 ## アーキテクチャ
 
+### 全体フロー
+
+```
+ユーザー入力 → Streamlit UI → LangChain → Claude API (Anthropic)
+      ↑                                          ↓
+      ←━━━━ Session State で会話履歴を保持 ←━━━
+```
+
+**単一ファイル構成** (`src/main.py`):
+- UI レイアウト、ユーザー入力処理、LLM 呼び出し、応答表示が1つのファイルに集約されている
+- 将来的な拡張の際は、LLM ロジックや UI 要素をモジュール化することを検討
+
 ### 状態管理
 
-`st.session_state` を使用して以下を保持:
-- `messages`: LangChain の `SystemMessage`/`HumanMessage`/`AIMessage` のリスト。会話履歴として機能
+`st.session_state` を使用してスクリーン再描画間で状態を保持:
+- `messages`: LangChain の `SystemMessage`/`HumanMessage`/`AIMessage` のリスト。会話履歴として機能し、モデルへの context となる
 - `costs`: 将来的な使用量追跡用（現在は未使用）
+
+セッションがクリアされるか "Clear Conversation" ボタンが押されると、初期 `SystemMessage` のみの状態にリセット。
 
 ### LLM インテグレーション
 
-- `ChatAnthropic` (from `langchain_anthropic`) で Claude モデルを初期化
-- ストリーミング対応: `model.stream()` で応答をリアルタイム取得し、`st.write_stream()` で表示
-- `SystemMessage` で AI のふるまいを定義（プロンプトテンプレート）
-- モデル選択: `claude-haiku-4-5`（軽量）と `claude-sonnet-4-6`（高性能）から選択可能
+**モデル初期化**:
+- `ChatAnthropic` (from `langchain_anthropic`) で Claude モデルをインスタンス化
+- モデル選択: `claude-haiku-4-5`（低コスト、軽量）と `claude-sonnet-4-6`（高性能）から選択可能
+- `temperature` はスライダーで動的に設定（0.0 = 決定的、1.0 = 創造的）
 
-### サイドバー UI
+**ストリーミング応答**:
+- `model.stream(messages)` で Claude からの応答を Token-by-Token で取得
+- Streamlit の `st.write_stream()` で受信と同時にリアルタイム表示
+- Callback ハンドラは現在コメントアウト（`StreamlitCallbackHandler` の version 互換性問題）
 
-- モデル選択ラジオボタン
-- Temperature スライダー（0.0～1.0、精度重視～創造性重視）
-- 会話クリアボタン
+**プロンプト**:
+- `SystemMessage(content="You are a helpful assistant.")` で AI のキャラクターを定義
+- ユーザー入力は `HumanMessage`、LLM 応答は `AIMessage` でラッピングして history に追加
+
+### UI 構成
+
+**レイアウト**: 
+- メイン領域：会話表示（過去メッセージと新規入力フォーム）
+- サイドバー：設定パネル
+
+**サイドバー要素**:
+- モデル選択ラジオボタン（Haiku/Sonnet）
+- Temperature スライダー（0.0～1.0、刻み 0.01）
+- "Clear Conversation" ボタン
 
 ## 規約
 
@@ -59,6 +98,28 @@ streamlit run src/main.py
 
 ## 既知の課題・注意点
 
-- **LangChain バージョン互換性**: `langchain-anthropic` と `langchain-core` のバージョン指定には注意。依存グラフが複雑で、不適切なバージョン組み合わせでインストール失敗または実行時エラーが発生する可能性がある
-- **StreamlitCallbackHandler**: import パスは `langchain_community.callbacks.streamlit` を使用。`langchain.callback` は古いパス
-- **UI レイアウト**: 入力フォーム（form）と以前の出力の間にスペースが生じる既知の課題がある（コード内の改善点コメント参照）
+- **LangChain バージョン互換性**: `langchain-anthropic` と `langchain-core` のバージョン指定には注意。依存グラフが複雑で、不適切なバージョン組み合わせでインストール失敗または実行時エラーが発生する可能性がある（例：`langchain-anthropic==0.3.0` は `langchain-core<0.4.0` に依存し、1.6.1 と互換しない）
+- **StreamlitCallbackHandler**: import パスは `langchain_community.callbacks.streamlit` を使用。古いパス `langchain.callback` は非推奨
+- **UI レイアウト**: 入力フォーム（form）と以前の出力の間にスペースが生じる既知の課題。Streamlit の form 仕様による制限（コード内のコメント参照）
+- **未実装**: テストスイート、Linter 設定、CI/CD パイプライン。将来追加される可能性あり
+
+## 開発上の注意
+
+### 依存管理
+
+`requirements.txt` は `pip freeze` スタイルで厳密なバージョン固定。新しい依存を追加する際:
+1. ホスト環境で `pip install <package>` してテスト
+2. 互換性問題がないことを確認してから `pip freeze > requirements.txt`
+3. または Docker コンテナ内で確認後、出力をコピーして requirements.txt に追加
+
+LangChain 周辺は特に互換性が複雑なため、major バージョン変更時は慎重に。
+
+### コード スタイル
+
+- ファイル内のコメントは日本語で統一（ユーザーが日本語で作業しているため）
+- `src/main.py` は単一モジュール。機能が増える場合は適切に分割を検討
+
+### 環境変数
+
+- `.env` に `ANTHROPIC_API_KEY` が必須。Docker Compose の `env_file` で読み込まれる
+- git リポジトリ化時は `.env` を `.gitignore` に追加すること（現在は非 git リポジトリ）
