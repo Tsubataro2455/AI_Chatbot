@@ -1,0 +1,11 @@
+services:
+  python:
+    build: .
+    container_name: streamlit-app
+    volumes:
+      - .:/app
+    ports:
+    # streamlitのポート番号は8501
+      - 8501:8501
+    env_file:
+      - .env
