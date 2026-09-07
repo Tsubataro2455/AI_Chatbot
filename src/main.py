@@ -62,8 +62,6 @@ def main():
             st.chat_message("user").markdown(user_input)
             # AIアシスタントの応答を表示
             with st.chat_message("assistant"):
-                # st_callback = StreamlitCallbackHandler(st.container())
-                # response = model.invoke(st.session_state.messages, callbacks=[st_callback])
                 stream = model.stream(st.session_state.messages)
                 res = st.write_stream(stream)
             # AIアシスタントの応答結果を記録
