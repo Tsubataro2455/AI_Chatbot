@@ -1,5 +1,4 @@
 import streamlit as st
-from langchain_community.callbacks.streamlit import StreamlitCallbackHandler
 from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 
